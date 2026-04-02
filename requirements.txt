@@ -1,0 +1,12 @@
+pyspark>=3.5.0,<4.0.0
+PyYAML>=6.0,<7.0
+fastapi>=0.111.0,<1.0.0
+uvicorn[standard]>=0.30.0,<1.0.0
+streamlit>=1.35.0,<2.0.0
+requests>=2.32.0,<3.0.0
+numpy>=1.26.0,<3.0.0
+pandas>=2.2.0,<3.0.0
+altair>=5.0.0,<6.0.0
+streamlit-sortables>=0.3.1,<1.0.0
+redis>=5.0.0,<6.0.0
+setuptools>=68.0.0,<81.0.0

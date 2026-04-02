@@ -1,0 +1,82 @@
+app:
+  seed: 42
+  top_n: 10
+
+paths:
+  raw_dir: data/raw
+  silver_ratings_path: data/silver/ratings_parquet
+  silver_movies_path: data/silver/movies_parquet
+  gold_fallback_path: data/gold/fallback_topn
+  gold_precomputed_path: data/gold/recommendations_precomputed
+  feedback_path: data/feedback/ratings_feedback.csv
+  user_events_path: data/logs/user_events
+  models_dir: models
+  best_model_path: models/best_als_model
+  rmse_results_path: metrics/rmse_results.csv
+  ranking_metrics_path: metrics/ranking_metrics.csv
+  etl_explain_path: logs/explain_etl.txt
+  train_explain_before_path: logs/explain_train_before.txt
+  train_explain_after_path: logs/explain_train_after.txt
+
+training:
+  split_ratio: [0.8, 0.2]
+  seed: 42
+  ranks: [16, 32]
+  reg_params: [0.05, 0.1]
+  max_iters: [10, 15]
+  nonnegative: true
+  implicit_prefs: false
+
+fallback:
+  top_n: 10
+  min_rating_count: 20
+
+hybrid:
+  enabled: true
+  als_weight: 0.7
+  content_weight: 0.3
+  candidate_top_k: 50
+  genre_boost: 0.12
+  diversity_penalty: 0.08
+  popularity_boost: 0.08
+  recency_boost: 0.03
+
+precompute:
+  top_n: 50
+  partition_buckets: 64
+
+evaluation:
+  ranking_k: 10
+  relevant_threshold: 4.0
+
+cache:
+  redis_enabled: false
+  redis_url: redis://localhost:6379/0
+  redis_ttl_sec: 300
+
+serving:
+  allow_als_legacy: false
+
+api:
+  host: 127.0.0.1
+  port: 8000
+  base_url: http://127.0.0.1:8000
+  cors_origins:
+    - http://localhost:5173
+    - http://127.0.0.1:5173
+
+ui:
+  title: Movie Recommendation Studio
+  subtitle: Distributed Spark + ALS + Cold Start + Feedback Loop
+  existing_user_demo_id: 2
+  new_user_demo_id: 999999
+  language_default: vi
+  top_n_min: 5
+  top_n_max: 20
+  request_timeout_sec: 120
+  online_poster_lookup: true
+  poster_lookup_timeout_sec: 8
+  carousel_window: 4
+  carousel_autoplay_default: true
+  carousel_loop_seconds_default: 20
+  grid_columns: 3

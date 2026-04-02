@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+logs/
+*.log
+
+# Runtime artifacts / temporary
+tmp_write_test*/
+tmp_*/
+debug_marker.txt
+debug_step.txt
+launch_cmd.txt
+tmp_cmd.txt
+tmp_main_from_server.js
+
+# Spark / pipeline outputs
+models/
+metrics/
+data/silver/
+data/gold/
+data/logs/
+
+# Frontend build artifacts
+web/node_modules/
+web/dist/
+frontend/node_modules/
+frontend/dist/
