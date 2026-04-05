@@ -371,6 +371,11 @@ export default function AuthSwitcherPage() {
     return `${token.slice(0, 6)}...${token.slice(-4)}`;
   }, [token]);
 
+  useEffect(() => {
+    setStatus({ type: "info", message: "" });
+    setInfo("");
+  }, [mode]);
+
   const pageData = {
     login: {
       title: "Chào mừng bạn quay trở lại",
@@ -471,7 +476,19 @@ export default function AuthSwitcherPage() {
     }
     setLoading(true);
     try {
-      setInfo("Chức năng đặt lại mật khẩu sẽ được bổ sung ở phiên bản tiếp theo.");
+      const response = await fetch(`${API_BASE_URL}/quen-mat-khau`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.detail || "Không gửi được yêu cầu.");
+      }
+      setSuccess(data?.message || "Đã gửi yêu cầu. Vui lòng kiểm tra email.");
+      setInfo("");
+    } catch (error) {
+      setError(error.message || "Không gửi được yêu cầu.");
     } finally {
       setLoading(false);
     }
