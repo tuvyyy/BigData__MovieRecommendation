@@ -108,6 +108,13 @@ class ProfileFeedbackRequest(BaseModel):
     retrain: bool = False
 
 
+class ForgotPasswordRequest(BaseModel):
+    """Payload for forgot password request (demo stub)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    email: str
+
 def _require_service() -> RecommendationService:
     if SERVICE is None:
         raise RuntimeError("Recommendation service is not initialized")
@@ -505,6 +512,20 @@ def lich_su_goi_y(
 def thong_tin_mo_hinh() -> dict:
     """Thông tin model/artifact cho phần demo sản phẩm."""
     return _require_service().health()
+
+
+@app.post("/quen-mat-khau")
+def quen_mat_khau(payload: ForgotPasswordRequest) -> dict:
+    """Đoạn stub cho flow quên mật khẩu: xác nhận email tồn tại và trả thông báo."""
+    store = _require_sql_store()
+    user = store.get_user_by_username_or_email(payload.email)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản với email này")
+    return {
+        "status": "ok",
+        "email": payload.email,
+        "message": "Đã nhận yêu cầu đặt lại mật khẩu. Vui lòng kiểm tra email (demo stub).",
+    }
 
 
 if WEB_DIST_DIR.exists():
