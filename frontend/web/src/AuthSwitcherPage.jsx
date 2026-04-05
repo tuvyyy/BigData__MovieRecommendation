@@ -417,6 +417,8 @@ export default function AuthSwitcherPage() {
       setProfiles(data.ho_so || []);
       if (typeof window !== "undefined") {
         window.localStorage.setItem("mr_token", data.token);
+        window.localStorage.setItem("khangdauti_token", data.token);
+        window.localStorage.setItem("khangdauti_user", JSON.stringify(data.nguoi_dung));
       }
       if (data.ho_so && data.ho_so.length > 0) {
         const firstProfile = data.ho_so[0];
@@ -424,6 +426,9 @@ export default function AuthSwitcherPage() {
         if (typeof window !== "undefined") {
           window.localStorage.setItem("mr_profile_id", String(firstProfile.id_ho_so));
         }
+      }
+      if (typeof window !== "undefined") {
+        window.location.href = "/recommend";
       }
       setSuccess(`Đăng nhập thành công. Xin chào ${data?.nguoi_dung?.ten_tai_khoan || "bạn"}!`);
     } catch (error) {
@@ -508,6 +513,9 @@ export default function AuthSwitcherPage() {
       }
       setProfiles(data.ho_so || []);
       setSuccess("Đã cập nhật danh sách hồ sơ.");
+      if (typeof window !== "undefined") {
+        window.location.href = "/recommend";
+      }
     } catch (error) {
       setError(error.message || "Không thể lấy hồ sơ.");
     } finally {
@@ -523,6 +531,9 @@ export default function AuthSwitcherPage() {
     if (typeof window !== "undefined") {
       window.localStorage.removeItem("mr_token");
       window.localStorage.removeItem("mr_profile_id");
+      window.localStorage.removeItem("khangdauti_token");
+      window.localStorage.removeItem("khangdauti_user");
+      window.location.href = "/auth";
     }
     setInfo("Đã đăng xuất khỏi phiên hiện tại.");
   };
