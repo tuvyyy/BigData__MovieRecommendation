@@ -19,6 +19,7 @@ Thumbs.db
 
 # Logs
 logs/
+backend/logs/
 *.log
 
 # Runtime artifacts / temporary
@@ -36,9 +37,18 @@ metrics/
 data/silver/
 data/gold/
 data/logs/
+backend/models/
+backend/metrics/
+backend/data/silver/
+backend/data/gold/
+backend/data/logs/
 
 # Frontend build artifacts
 web/node_modules/
 web/dist/
 frontend/node_modules/
 frontend/dist/
+backend/frontend/node_modules/
+backend/frontend/dist/
+frontend/web/node_modules/
+frontend/web/dist/

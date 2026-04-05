@@ -4,30 +4,31 @@ Production-ready end-to-end MovieLens recommendation system using ETL + ALS + Hy
 
 ## Run Commands
 
-Build full pipeline (ETL + training + fallback):
+One-command full stack (build frontend, start API, serve dist):
 
-```bash
-python run_pipeline.py
+```powershell
+cd backend
+powershell -ExecutionPolicy Bypass -File .\run_one_http.ps1
 ```
 
-Run Streamlit UI:
+Split mode (dev):
 
-```bash
-streamlit run ui/streamlit_app.py
-```
+```powershell
+# Terminal 1 - API
+cd backend
+..\.venv\Scripts\python.exe run_api.py
 
-Optional API server:
-
-```bash
-python run_api.py
-```
-
-Run React web UI (landing page + recommendation studio):
-
-```bash
-cd web
+# Terminal 2 - React dev server
+cd frontend\web
 npm install
-npm run dev
+npm run dev -- --host 127.0.0.1 --port 4173 --strictPort
+```
+
+Pipeline (ETL + training + fallback precompute):
+
+```bash
+cd backend
+python run_pipeline.py
 ```
 
 ## Features
@@ -88,58 +89,25 @@ npm run dev
     - Recommendation studio page
     - In-page rating submission flow
 
-## Project Structure
+## Project Structure (simplified)
 
 ```text
 .
-|-- api/
-|   `-- main.py
-|-- configs/
-|   |-- app_config.yaml
-|   `-- spark_config.yaml
-|-- data/
-|   |-- feedback/
-|   |-- gold/
-|   |-- raw/
-|   `-- silver/
-|-- logs/
-|-- metrics/
-|-- models/
-|   `-- versions/
-|-- src/
-|   |-- etl/
-|   |   |-- ingest.py
-|   |   |-- pipeline.py
-|   |   |-- schemas.py
-|   |   `-- transform.py
-|   |-- model/
-|   |   |-- evaluate.py
-|   |   |-- fallback.py
-|   |   |-- feedback.py
-|   |   |-- pipeline.py
-|   |   |-- precompute.py
-|   |   `-- train_als.py
-|   |-- hybrid/
-|   |   |-- content_based.py
-|   |   |-- explain.py
-|   |   `-- rerank.py
-|   |-- serving/
-|   |   |-- cache.py
-|   |   `-- events.py
-|   |-- service/
-|   |   `-- recommendation_service.py
-|   `-- utils/
-|       |-- config.py
-|       |-- logger.py
-|       `-- spark_session.py
-|-- ui/
-|   `-- streamlit_app.py
-|-- web/
-|   |-- src/
-|   |-- package.json
-|   `-- vite.config.ts
-|-- run_api.py
-|-- run_pipeline.py
+|-- backend/
+|   |-- api/                    # FastAPI app (main.py)
+|   |-- configs/                # YAML configs (app, spark)
+|   |-- data/                   # data/raw, data/silver, data/gold, data/sql
+|   |-- src/                    # ETL, model, serving, utils
+|   |-- run_api.py              # start API
+|   |-- run_pipeline.py         # ETL + training pipeline
+|   `-- run_one_http.ps1        # build frontend + start API
+|-- frontend/
+|   `-- web/                    # React/Vite UI (dark-gold)
+|       |-- src/
+|       |-- package.json
+|       `-- vite.config.ts
+|-- tools/                      # optional
+|-- ui/                         # legacy Streamlit demo
 `-- requirements.txt
 ```
 

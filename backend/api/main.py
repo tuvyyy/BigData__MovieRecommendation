@@ -29,7 +29,7 @@ app = FastAPI(title="Movie Recommendation API", version="1.0.0")
 SERVICE: RecommendationService | None = None
 SQL_STORE: SqlStore | None = None
 API_LOGGER = get_logger("api", log_file="logs/app.log")
-WEB_DIST_DIR = PROJECT_ROOT / "web" / "dist"
+WEB_DIST_DIR = PROJECT_ROOT.parent / "frontend" / "web" / "dist"
 
 cors_origins = APP_CONFIG.get("api", {}).get(
     "cors_origins",
