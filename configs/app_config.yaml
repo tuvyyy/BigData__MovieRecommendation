@@ -54,6 +54,17 @@ cache:
   redis_url: redis://localhost:6379/0
   redis_ttl_sec: 300
 
+database:
+  engine: sqlserver
+  server: localhost\SQLEXPRESS
+  database: Movie_Recommendation
+  driver: ODBC Driver 17 for SQL Server
+  trusted_connection: yes
+  trust_server_certificate: yes
+  encrypt: yes
+  timeout: 5
+  sqlite_path: data/sql/recommendation.db
+
 serving:
   allow_als_legacy: false
 
@@ -64,6 +75,8 @@ api:
   cors_origins:
     - http://localhost:5173
     - http://127.0.0.1:5173
+    - http://localhost:4173
+    - http://127.0.0.1:4173
 
 ui:
   title: Movie Recommendation Studio

@@ -165,6 +165,18 @@ The ETL layer auto-detects supported files.
 - `GET /recommend/{user_id}?top_n=10&genre=Action`
 - `POST /rate`
 - `POST /event`
+- `POST /dang-ky`
+- `POST /dang-nhap`
+- `GET /ho-so`
+- `POST /ho-so`
+- `GET /goi-y/{id_ho_so}?top_n=10&genre=Drama`
+- `POST /phan-hoi`
+- `GET /lich-su-goi-y/{id_ho_so}`
+
+Default demo account (auto-seeded in SQL store):
+
+- `ten_dang_nhap`: `demo`
+- `mat_khau`: `demo123`
 
 ## React UI Notes
 

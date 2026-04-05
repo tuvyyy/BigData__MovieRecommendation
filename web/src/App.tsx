@@ -1,4 +1,4 @@
-import {
+﻿import {
   useCallback,
   useEffect,
   useMemo,
@@ -55,6 +55,44 @@ type Burst = {
   x: number
   y: number
 }
+
+type RecommendationRow = {
+  movieId: number
+  title: string
+  genres: string
+  score: number
+  als_score?: number | null
+  content_score?: number | null
+  rank?: number | null
+  explain?: string
+}
+
+type RecommendationPayload = {
+  route?: string
+  user_id?: number
+  recommendations?: RecommendationRow[]
+}
+
+type AuthUser = {
+  id_nguoi_dung: number
+  ten_tai_khoan: string
+  email: string
+  ho_ten?: string | null
+  vai_tro?: string
+}
+
+type UserProfile = {
+  id_ho_so: number
+  id_nguoi_dung: number
+  ten_ho_so: string
+  che_do_goi_y: string
+  id_user_ml: number
+  the_loai_uu_tien?: string | null
+}
+
+type UserMode = 'existing' | 'new'
+type RecoStage = 'onboard' | 'discover' | 'feedback'
+type PageMode = 'landing' | 'recommend'
 
 const SECTION_IDS: readonly SectionId[] = [
   'home',
@@ -167,7 +205,7 @@ const SERVICES_VI: readonly ServiceItem[] = [
     index: '01',
     title: 'Tầng ETL phân tán',
     description:
-      'Nạp ratings và movies bằng schema rõ ràng, làm sạch dữ liệu, partition theo user bucket, lưu Parquet tối ưu cho huấn luyện lớn.',
+      'Nạp ratings và movies bằng schema rõ ràng, làm sạch dữ liệu, partition theo user bucket và lưu Parquet tối ưu cho huấn luyện lớn.',
     image:
       'https://images.unsplash.com/photo-1461749280684-dccba630e2f6?auto=format&fit=crop&w=960&q=80',
   },
@@ -490,9 +528,1381 @@ function TransitionPlate({ label }: { label: string }) {
   )
 }
 
+type RecommendationHeaderProps = {
+  locale: Locale
+  stageTabs: ReadonlyArray<{ key: RecoStage; label: string }>
+  recoStage: RecoStage
+  setRecoStage: (stage: RecoStage) => void
+  apiHealth: string
+  routeBadge: string
+  routeExplain: string
+}
+
+function RecommendationHeader({
+  locale,
+  stageTabs,
+  recoStage,
+  setRecoStage,
+  apiHealth,
+  routeBadge,
+  routeExplain,
+}: RecommendationHeaderProps) {
+  const activeIndex = stageTabs.findIndex((tab) => tab.key === recoStage)
+  return (
+    <div className="recommend-shell-head">
+      <div className="recommend-panel-head">
+        <div className="recommend-stage-tabs">
+          {stageTabs.map((tab, index) => {
+            const stateClass =
+              index < activeIndex ? 'is-complete' : index === activeIndex ? 'is-active' : 'is-inactive'
+
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                className={`recommend-stage-btn ${stateClass}`}
+                onClick={() => setRecoStage(tab.key)}
+              >
+                <span className="recommend-stage-num">{index + 1}</span>
+                <span>{tab.label}</span>
+              </button>
+            )
+          })}
+        </div>
+        <div className="recommend-status-line">
+          <span className={`recommend-health-dot ${apiHealth === 'online' ? 'is-online' : 'is-offline'}`} />
+          <p>
+            {apiHealth === 'online'
+              ? locale === 'vi'
+                ? 'Hệ thống sẵn sàng'
+                : 'System ready'
+              : locale === 'vi'
+                ? 'Tạm thời chưa kết nối được hệ thống'
+                : 'System is temporarily unreachable'}
+          </p>
+        </div>
+      </div>
+      <div className="recommend-route-wrap">
+        <span className="recommend-route-badge">{routeBadge}</span>
+        <p className="recommend-route-note">{routeExplain}</p>
+      </div>
+    </div>
+  )
+}
+
+type UserModeSelectorProps = {
+  locale: Locale
+  userMode: UserMode
+  onSelectMode: (mode: UserMode) => void
+}
+
+function UserModeSelector({ locale, userMode, onSelectMode }: UserModeSelectorProps) {
+  return (
+    <div className="recommend-profiles">
+      <button
+        type="button"
+        className={`recommend-profile-btn ${userMode === 'existing' ? 'is-active' : ''}`}
+        onClick={() => onSelectMode('existing')}
+      >
+        <strong>
+          {locale === 'vi' ? 'Gợi ý cá nhân hóa' : 'Personalized recommendations'}
+        </strong>
+        <span>
+          {locale === 'vi'
+            ? 'Dành cho người đã có lịch sử xem và đánh giá (ALS).'
+            : 'Prioritizes personalized recommendations from past behavior (ALS).'}
+        </span>
+      </button>
+      <button
+        type="button"
+        className={`recommend-profile-btn ${userMode === 'new' ? 'is-active' : ''}`}
+        onClick={() => onSelectMode('new')}
+      >
+        <strong>
+          {locale === 'vi' ? 'Gợi ý theo sở thích ban đầu' : 'Starter preference recommendations'}
+        </strong>
+        <span>
+          {locale === 'vi'
+            ? 'Dành cho hồ sơ mới, ưu tiên thể loại và độ phổ biến (Cold Start).'
+            : 'Uses genre + popularity before enough data is available (Cold Start).'}
+        </span>
+      </button>
+    </div>
+  )
+}
+
+type FilterBarProps = {
+  locale: Locale
+  isAuthenticated: boolean
+  authUser: AuthUser | null
+  profiles: UserProfile[]
+  activeProfileId: number | null
+  setActiveProfileId: (id: number) => void
+  recoTopN: number
+  setRecoTopN: (value: number) => void
+  recoGenre: string
+  setRecoGenre: (genre: string) => void
+  quickGenres: string[]
+  recoLoading: boolean
+  ratedCount: number
+  onFetchRecommendations: () => void
+  onOpenFeedback: () => void
+  onOpenAuth: () => void
+  onBurst: (event: ReactMouseEvent<HTMLElement>) => void
+}
+
+function FilterBar({
+  locale,
+  isAuthenticated,
+  authUser,
+  profiles,
+  activeProfileId,
+  setActiveProfileId,
+  recoTopN,
+  setRecoTopN,
+  recoGenre,
+  setRecoGenre,
+  quickGenres,
+  recoLoading,
+  ratedCount,
+  onFetchRecommendations,
+  onOpenFeedback,
+  onOpenAuth,
+  onBurst,
+}: FilterBarProps) {
+  const activeProfile = profiles.find((profile) => profile.id_ho_so === activeProfileId) ?? null
+  const profileModeLabel = activeProfile?.che_do_goi_y === 'ca_nhan_hoa'
+    ? locale === 'vi'
+      ? 'Cá nhân hóa (ALS)'
+      : 'Personalized (ALS)'
+    : locale === 'vi'
+      ? 'Sở thích ban đầu (Cold Start)'
+      : 'Starter preferences (Cold Start)'
+
+  return (
+    <div className="recommend-filter-card">
+      <div className="recommend-form">
+        <label>
+          <span>{locale === 'vi' ? 'Hồ sơ hiện tại' : 'Current profile'}</span>
+          {isAuthenticated ? (
+            <select
+              className="recommend-input"
+              value={activeProfileId ?? ''}
+              onChange={(event) => setActiveProfileId(Number(event.target.value))}
+            >
+              {profiles.map((profile) => (
+                <option key={profile.id_ho_so} value={profile.id_ho_so}>
+                  {profile.ten_ho_so}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="recommend-auth-inline">
+              <span className="recommend-auth-note">
+                {locale === 'vi' ? 'Đăng nhập để sử dụng hồ sơ cá nhân hóa.' : 'Sign in to use personalized profiles.'}
+              </span>
+              <button
+                type="button"
+                className="recommend-chip-btn"
+                onMouseDown={onBurst}
+                onClick={onOpenAuth}
+              >
+                {locale === 'vi' ? 'Mở đăng nhập' : 'Open sign in'}
+              </button>
+            </div>
+          )}
+        </label>
+
+        <label>
+          <span>Top-N</span>
+          <input
+            className="recommend-input"
+            type="number"
+            min={3}
+            max={20}
+            value={recoTopN}
+            onChange={(event) => setRecoTopN(Number(event.target.value) || 10)}
+          />
+        </label>
+
+        <label>
+          <span>{locale === 'vi' ? 'Thể loại ưu tiên' : 'Preferred genre'}</span>
+          <select className="recommend-input" value={recoGenre} onChange={(event) => setRecoGenre(event.target.value)}>
+            <option value="">{locale === 'vi' ? 'Không lọc' : 'No filter'}</option>
+            {quickGenres.map((genre) => (
+              <option key={genre} value={genre}>
+                {genre}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {isAuthenticated && (
+        <div className="recommend-inline recommend-profile-summary">
+          <span className="recommend-user-pill">
+            {locale === 'vi' ? `Tài khoản: ${authUser?.ten_tai_khoan ?? ''}` : `Account: ${authUser?.ten_tai_khoan ?? ''}`}
+          </span>
+          <span className="recommend-user-pill">{profileModeLabel}</span>
+        </div>
+      )}
+
+      <div className="recommend-genre-tags">
+        {quickGenres.map((genre) => (
+          <button
+            key={genre}
+            type="button"
+            className={`recommend-chip-btn ${recoGenre === genre ? 'is-active' : ''}`}
+            onClick={() => setRecoGenre(genre)}
+          >
+            {genre}
+          </button>
+        ))}
+      </div>
+
+      <div className="recommend-actions">
+        <button
+          type="button"
+          className="primary-cta recommend-run-btn"
+          onMouseDown={onBurst}
+          onClick={onFetchRecommendations}
+          disabled={recoLoading || !isAuthenticated}
+        >
+          {recoLoading
+            ? locale === 'vi'
+              ? 'Đang lấy gợi ý...'
+              : 'Fetching...'
+            : !isAuthenticated
+              ? locale === 'vi'
+                ? 'Đăng nhập để lấy gợi ý'
+                : 'Sign in to get recommendations'
+            : locale === 'vi'
+              ? 'Lấy gợi ý phim'
+              : 'Get movie recommendations'}
+        </button>
+        <button
+          type="button"
+          className="secondary-cta recommend-run-btn"
+          onMouseDown={onBurst}
+          onClick={onOpenFeedback}
+          disabled={!isAuthenticated}
+        >
+          {locale === 'vi' ? `Phản hồi của bạn (${ratedCount})` : `Your feedback (${ratedCount})`}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+type RecommendationCardProps = {
+  locale: Locale
+  row: RecommendationRow
+  index: number
+  total: number
+  posterUrl: string
+  isSaved: boolean
+  ratingValue: number
+  isRatingOpen: boolean
+  scoreLabel: string
+  year: string
+  explainText: string
+  onOpenDetail: () => void
+  onToggleSave: () => void
+  onLike: () => void
+  onDislike: () => void
+  onOpenRating: () => void
+  onSetRating: (value: number) => void
+  onSubmitRating: () => void
+}
+
+function RecommendationCard({
+  locale,
+  row,
+  index,
+  total,
+  posterUrl,
+  isSaved,
+  ratingValue,
+  isRatingOpen,
+  scoreLabel,
+  year,
+  explainText,
+  onOpenDetail,
+  onToggleSave,
+  onLike,
+  onDislike,
+  onOpenRating,
+  onSetRating,
+  onSubmitRating,
+}: RecommendationCardProps) {
+  const rankingLabel =
+    index <= Math.ceil(total * 0.2)
+      ? locale === 'vi'
+        ? 'Đề xuất nổi bật'
+        : 'Strong pick'
+      : index <= Math.ceil(total * 0.55)
+        ? locale === 'vi'
+          ? 'Ưu tiên cho bạn'
+          : 'High match'
+        : locale === 'vi'
+          ? 'Mức phù hợp cao'
+          : 'Worth watching'
+
+  return (
+    <article className="recommend-row">
+      <div className="recommend-visual">
+        <img className="recommend-poster" src={posterUrl} alt={row.title} loading="lazy" />
+        <span className="recommend-rank">#{index + 1}</span>
+      </div>
+
+      <div className="recommend-info">
+        <div className="recommend-main-col">
+          <div className="recommend-title-row">
+            <p className="recommend-title">
+              {row.title}
+              {year && <span className="recommend-year">{year}</span>}
+            </p>
+          </div>
+
+          <div className="recommend-badges">
+            <span className="recommend-level-badge">{rankingLabel}</span>
+            {row.genres
+              .split('|')
+              .slice(0, 3)
+              .map((genre) => (
+                <span key={`${row.movieId}-${genre}`} className="recommend-tag">
+                  {genre}
+                </span>
+              ))}
+          </div>
+
+          <p className="recommend-explain-line">{explainText}</p>
+        </div>
+
+        <div className="recommend-side-col">
+          <span className="recommend-score">{scoreLabel}</span>
+
+          <div className="recommend-item-actions">
+            <button type="button" className="recommend-chip-btn" onClick={onOpenDetail}>
+              {locale === 'vi' ? 'Xem chi tiết' : 'View detail'}
+            </button>
+            <button type="button" className={`recommend-chip-btn ${isSaved ? 'is-active' : ''}`} onClick={onToggleSave}>
+              {isSaved ? (locale === 'vi' ? 'Đã lưu xem sau' : 'Saved') : locale === 'vi' ? 'Lưu xem sau' : 'Save for later'}
+            </button>
+            <button type="button" className="recommend-chip-btn" onClick={onOpenRating}>
+              {locale === 'vi' ? 'Đánh giá' : 'Rate'}
+            </button>
+          </div>
+
+          <div className="recommend-feedback-actions">
+            <button type="button" className="recommend-chip-btn recommend-chip-lite" onClick={onLike}>
+              👍 {locale === 'vi' ? 'Thích' : 'Like'}
+            </button>
+            <button type="button" className="recommend-chip-btn recommend-chip-lite" onClick={onDislike}>
+              👎 {locale === 'vi' ? 'Không quan tâm' : 'Not interested'}
+            </button>
+          </div>
+
+          <AnimatePresence initial={false}>
+            {isRatingOpen && (
+              <motion.div
+                className="recommend-rating-reveal"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.24, ease: EASE_SMOOTH }}
+              >
+                <div className="recommend-rating-row">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={`${row.movieId}-star-${star}`}
+                    type="button"
+                    className={`recommend-star-btn ${ratingValue >= star ? 'is-active' : ''}`}
+                    onClick={() => onSetRating(star)}
+                  >
+                    ★
+                  </button>
+                ))}
+                <button type="button" className="recommend-chip-btn recommend-chip-primary" onClick={onSubmitRating}>
+                  {locale === 'vi' ? 'Gửi đánh giá' : 'Submit rating'}
+                </button>
+              </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
+    </article>
+  )
+}
+
+type FeedbackPanelProps = {
+  locale: Locale
+  ratedCount: number
+  watchlistCount: number
+  activeUserId: number
+  ratedRows: RecommendationRow[]
+  watchlistRows: RecommendationRow[]
+  ratingByMovie: Record<number, number>
+  onOpenMovie: (row: RecommendationRow) => void
+  onBackToDiscover: () => void
+  onRefresh: () => void
+  onBurst: (event: ReactMouseEvent<HTMLElement>) => void
+}
+
+function FeedbackPanel({
+  locale,
+  ratedCount,
+  watchlistCount,
+  activeUserId,
+  ratedRows,
+  watchlistRows,
+  ratingByMovie,
+  onOpenMovie,
+  onBackToDiscover,
+  onRefresh,
+  onBurst,
+}: FeedbackPanelProps) {
+  return (
+    <div className="recommend-feedback-board">
+      <div className="recommend-feedback-stats">
+        <article>
+          <p>{locale === 'vi' ? 'Phim đã chấm' : 'Rated movies'}</p>
+          <strong>{ratedCount}</strong>
+        </article>
+        <article>
+          <p>{locale === 'vi' ? 'Danh sách xem sau' : 'Watchlist'}</p>
+          <strong>{watchlistCount}</strong>
+        </article>
+        <article>
+          <p>{locale === 'vi' ? 'Hồ sơ đang dùng' : 'Active profile'}</p>
+          <strong>{locale === 'vi' ? `Hồ sơ ${activeUserId}` : `User ${activeUserId}`}</strong>
+        </article>
+      </div>
+
+      {ratedRows.length > 0 ? (
+        <div className="recommend-mini-list">
+          {ratedRows.map((row) => (
+            <div key={`rated-${row.movieId}`} className="recommend-mini-row">
+              <span>{row.title}</span>
+              <strong>{ratingByMovie[row.movieId]}/5</strong>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="recommend-empty">
+          {locale === 'vi'
+            ? 'Bạn chưa đánh giá phim nào. Hãy quay lại bước Gợi ý để chấm sao một vài phim.'
+            : 'No ratings yet. Return to Recommendations and rate a few movies.'}
+        </p>
+      )}
+
+      {watchlistRows.length > 0 && (
+        <div className="recommend-mini-list">
+          {watchlistRows.map((row) => (
+            <div key={`watch-${row.movieId}`} className="recommend-mini-row">
+              <span>{row.title}</span>
+              <button type="button" className="recommend-chip-btn" onClick={() => onOpenMovie(row)}>
+                {locale === 'vi' ? 'Mở phim' : 'Open movie'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="recommend-actions">
+        <button type="button" className="primary-cta recommend-run-btn" onMouseDown={onBurst} onClick={onRefresh}>
+          {locale === 'vi' ? 'Cập nhật lại gợi ý' : 'Refresh recommendations'}
+        </button>
+        <button type="button" className="secondary-cta recommend-run-btn" onMouseDown={onBurst} onClick={onBackToDiscover}>
+          {locale === 'vi' ? 'Quay lại danh sách phim' : 'Back to movie list'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+type RecommendationAuthPanelProps = {
+  locale: Locale
+  isAuthenticated: boolean
+  authView: 'login' | 'register'
+  setAuthView: (view: 'login' | 'register') => void
+  authUser: AuthUser | null
+  profileCount: number
+  authLoading: boolean
+  authError: string
+  loginIdentifier: string
+  setLoginIdentifier: (value: string) => void
+  loginPassword: string
+  setLoginPassword: (value: string) => void
+  registerFullName: string
+  setRegisterFullName: (value: string) => void
+  registerUsername: string
+  setRegisterUsername: (value: string) => void
+  registerEmail: string
+  setRegisterEmail: (value: string) => void
+  registerPassword: string
+  setRegisterPassword: (value: string) => void
+  registerConfirmPassword: string
+  setRegisterConfirmPassword: (value: string) => void
+  onLogin: () => void
+  onRegister: () => void
+  onDemoLogin: () => void
+  onLogout: () => void
+  onBurst: (event: ReactMouseEvent<HTMLElement>) => void
+}
+
+function RecommendationAuthPanel({
+  locale,
+  isAuthenticated,
+  authView,
+  setAuthView,
+  authUser,
+  profileCount,
+  authLoading,
+  authError,
+  loginIdentifier,
+  setLoginIdentifier,
+  loginPassword,
+  setLoginPassword,
+  registerFullName,
+  setRegisterFullName,
+  registerUsername,
+  setRegisterUsername,
+  registerEmail,
+  setRegisterEmail,
+  registerPassword,
+  setRegisterPassword,
+  registerConfirmPassword,
+  setRegisterConfirmPassword,
+  onLogin,
+  onRegister,
+  onDemoLogin,
+  onLogout,
+  onBurst,
+}: RecommendationAuthPanelProps) {
+  if (isAuthenticated && authUser) {
+    return (
+      <div className="recommend-auth-panel is-signed-in">
+        <div>
+          <p className="recommend-auth-kicker">{locale === 'vi' ? 'Tài khoản hiện tại' : 'Current account'}</p>
+          <h3>{authUser.ho_ten || authUser.ten_tai_khoan}</h3>
+          <p className="recommend-auth-meta">
+            {locale === 'vi'
+              ? `@${authUser.ten_tai_khoan} • ${profileCount} hồ sơ`
+              : `@${authUser.ten_tai_khoan} • ${profileCount} profiles`}
+          </p>
+        </div>
+        <button type="button" className="secondary-cta recommend-run-btn" onMouseDown={onBurst} onClick={onLogout}>
+          {locale === 'vi' ? 'Đăng xuất' : 'Sign out'}
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="recommend-auth-panel">
+      <div className="recommend-auth-head">
+        <div className="recommend-auth-tabs">
+          <button
+            type="button"
+            className={`recommend-chip-btn ${authView === 'login' ? 'is-active' : ''}`}
+            onClick={() => setAuthView('login')}
+          >
+            {locale === 'vi' ? 'Đăng nhập' : 'Sign in'}
+          </button>
+          <button
+            type="button"
+            className={`recommend-chip-btn ${authView === 'register' ? 'is-active' : ''}`}
+            onClick={() => setAuthView('register')}
+          >
+            {locale === 'vi' ? 'Đăng ký' : 'Sign up'}
+          </button>
+        </div>
+        <button type="button" className="recommend-chip-btn recommend-chip-lite" onClick={onDemoLogin} onMouseDown={onBurst}>
+          {locale === 'vi' ? 'Dùng thử nhanh (demo)' : 'Quick demo login'}
+        </button>
+      </div>
+
+      {authView === 'login' ? (
+        <div className="recommend-auth-form">
+          <label>
+            <span>{locale === 'vi' ? 'Tên tài khoản hoặc email' : 'Username or email'}</span>
+            <input
+              className="recommend-input"
+              value={loginIdentifier}
+              onChange={(event) => setLoginIdentifier(event.target.value)}
+              placeholder={locale === 'vi' ? 'demo hoặc demo@khangdauti.local' : 'demo or demo@khangdauti.local'}
+            />
+          </label>
+          <label>
+            <span>{locale === 'vi' ? 'Mật khẩu' : 'Password'}</span>
+            <input
+              className="recommend-input"
+              type="password"
+              value={loginPassword}
+              onChange={(event) => setLoginPassword(event.target.value)}
+              placeholder="••••••••"
+            />
+          </label>
+          <button
+            type="button"
+            className="primary-cta recommend-run-btn"
+            onMouseDown={onBurst}
+            onClick={onLogin}
+            disabled={authLoading}
+          >
+            {authLoading
+              ? locale === 'vi'
+                ? 'Đang đăng nhập...'
+                : 'Signing in...'
+              : locale === 'vi'
+                ? 'Đăng nhập và mở hồ sơ'
+                : 'Sign in and load profiles'}
+          </button>
+        </div>
+      ) : (
+        <div className="recommend-auth-form">
+          <label>
+            <span>{locale === 'vi' ? 'Họ và tên' : 'Full name'}</span>
+            <input
+              className="recommend-input"
+              value={registerFullName}
+              onChange={(event) => setRegisterFullName(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>{locale === 'vi' ? 'Tên tài khoản' : 'Username'}</span>
+            <input
+              className="recommend-input"
+              value={registerUsername}
+              onChange={(event) => setRegisterUsername(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>Email</span>
+            <input className="recommend-input" value={registerEmail} onChange={(event) => setRegisterEmail(event.target.value)} />
+          </label>
+          <label>
+            <span>{locale === 'vi' ? 'Mật khẩu' : 'Password'}</span>
+            <input
+              className="recommend-input"
+              type="password"
+              value={registerPassword}
+              onChange={(event) => setRegisterPassword(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>{locale === 'vi' ? 'Xác nhận mật khẩu' : 'Confirm password'}</span>
+            <input
+              className="recommend-input"
+              type="password"
+              value={registerConfirmPassword}
+              onChange={(event) => setRegisterConfirmPassword(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="primary-cta recommend-run-btn"
+            onMouseDown={onBurst}
+            onClick={onRegister}
+            disabled={authLoading}
+          >
+            {authLoading ? (locale === 'vi' ? 'Đang tạo tài khoản...' : 'Creating account...') : locale === 'vi' ? 'Tạo tài khoản' : 'Create account'}
+          </button>
+        </div>
+      )}
+
+      {authError && <p className="recommend-error">{authError}</p>}
+    </div>
+  )
+}
+
+function RecommendationHero({ locale }: { locale: Locale }) {
+  return (
+    <section className="recommend-hero-section">
+      <div className="recommend-hero-backdrop" aria-hidden />
+      <div className="recommend-hero-overlay" aria-hidden />
+      <div className="recommend-content-rail">
+        <div className="recommend-hero-content">
+          <p className="section-kicker">
+            {locale === 'vi' ? 'Trung tâm gợi ý cá nhân hóa' : 'Personalized recommendation center'}
+          </p>
+          <h1>{locale === 'vi' ? 'GỢI Ý PHIM' : 'MOVIE RECOMMENDATIONS'}</h1>
+          <p>
+            {locale === 'vi'
+              ? 'Khởi tạo hồ sơ, nhận gợi ý phù hợp và phản hồi để hệ thống học gu xem của bạn theo thời gian.'
+              : 'Initialize profile, get relevant recommendations, and send feedback so the system learns your taste over time.'}
+          </p>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function RecommendationStepper(props: RecommendationHeaderProps) {
+  return <RecommendationHeader {...props} />
+}
+
+function UserProfileModeCard(props: UserModeSelectorProps) {
+  return <UserModeSelector {...props} />
+}
+
+type RecommendationControlsProps = {
+  locale: Locale
+  isAuthenticated: boolean
+  authView: 'login' | 'register'
+  setAuthView: (view: 'login' | 'register') => void
+  authUser: AuthUser | null
+  authProfiles: UserProfile[]
+  activeProfileId: number | null
+  setActiveProfileId: (id: number) => void
+  authLoading: boolean
+  authError: string
+  loginIdentifier: string
+  setLoginIdentifier: (value: string) => void
+  loginPassword: string
+  setLoginPassword: (value: string) => void
+  registerFullName: string
+  setRegisterFullName: (value: string) => void
+  registerUsername: string
+  setRegisterUsername: (value: string) => void
+  registerEmail: string
+  setRegisterEmail: (value: string) => void
+  registerPassword: string
+  setRegisterPassword: (value: string) => void
+  registerConfirmPassword: string
+  setRegisterConfirmPassword: (value: string) => void
+  onLogin: () => void
+  onRegister: () => void
+  onDemoLogin: () => void
+  onLogout: () => void
+  stageTabs: ReadonlyArray<{ key: RecoStage; label: string }>
+  recoStage: RecoStage
+  setRecoStage: (stage: RecoStage) => void
+  apiHealth: string
+  routeBadge: string
+  routeExplain: string
+  userMode: UserMode
+  setUserMode: (mode: UserMode) => void
+  recoTopN: number
+  setRecoTopN: (value: number) => void
+  recoGenre: string
+  setRecoGenre: (genre: string) => void
+  quickGenres: string[]
+  recoLoading: boolean
+  ratedCount: number
+  onOpenFeedback: () => void
+  onFetchRecommendations: () => void
+  onBurst: (event: ReactMouseEvent<HTMLElement>) => void
+  showOnboardingHint: boolean
+}
+
+function RecommendationControls({
+  locale,
+  isAuthenticated,
+  authView,
+  setAuthView,
+  authUser,
+  authProfiles,
+  activeProfileId,
+  setActiveProfileId,
+  authLoading,
+  authError,
+  loginIdentifier,
+  setLoginIdentifier,
+  loginPassword,
+  setLoginPassword,
+  registerFullName,
+  setRegisterFullName,
+  registerUsername,
+  setRegisterUsername,
+  registerEmail,
+  setRegisterEmail,
+  registerPassword,
+  setRegisterPassword,
+  registerConfirmPassword,
+  setRegisterConfirmPassword,
+  onLogin,
+  onRegister,
+  onDemoLogin,
+  onLogout,
+  stageTabs,
+  recoStage,
+  setRecoStage,
+  apiHealth,
+  routeBadge,
+  routeExplain,
+  userMode,
+  setUserMode,
+  recoTopN,
+  setRecoTopN,
+  recoGenre,
+  setRecoGenre,
+  quickGenres,
+  recoLoading,
+  ratedCount,
+  onOpenFeedback,
+  onFetchRecommendations,
+  onBurst,
+  showOnboardingHint,
+}: RecommendationControlsProps) {
+  const activeProfile = authProfiles.find((profile) => profile.id_ho_so === activeProfileId) ?? null
+
+  return (
+    <section className="recommend-controls-section">
+      <div className="recommend-content-rail">
+        <RecommendationAuthPanel
+          locale={locale}
+          isAuthenticated={isAuthenticated}
+          authView={authView}
+          setAuthView={setAuthView}
+          authUser={authUser}
+          profileCount={authProfiles.length}
+          authLoading={authLoading}
+          authError={authError}
+          loginIdentifier={loginIdentifier}
+          setLoginIdentifier={setLoginIdentifier}
+          loginPassword={loginPassword}
+          setLoginPassword={setLoginPassword}
+          registerFullName={registerFullName}
+          setRegisterFullName={setRegisterFullName}
+          registerUsername={registerUsername}
+          setRegisterUsername={setRegisterUsername}
+          registerEmail={registerEmail}
+          setRegisterEmail={setRegisterEmail}
+          registerPassword={registerPassword}
+          setRegisterPassword={setRegisterPassword}
+          registerConfirmPassword={registerConfirmPassword}
+          setRegisterConfirmPassword={setRegisterConfirmPassword}
+          onLogin={onLogin}
+          onRegister={onRegister}
+          onDemoLogin={onDemoLogin}
+          onLogout={onLogout}
+          onBurst={onBurst}
+        />
+
+        {isAuthenticated ? (
+          <>
+        <RecommendationStepper
+          locale={locale}
+          stageTabs={stageTabs}
+          recoStage={recoStage}
+          setRecoStage={setRecoStage}
+          apiHealth={apiHealth}
+          routeBadge={routeBadge}
+          routeExplain={routeExplain}
+        />
+
+        <div className="recommend-top-grid">
+          <div className="recommend-flow-col">
+            <UserProfileModeCard
+              locale={locale}
+              userMode={userMode}
+              onSelectMode={setUserMode}
+            />
+
+            {showOnboardingHint && (
+              <div className="recommend-stage-card">
+                <h3>{locale === 'vi' ? 'Bắt đầu hành trình gợi ý' : 'Start recommendation journey'}</h3>
+                <p>
+                  {locale === 'vi'
+                    ? 'Chọn loại hồ sơ, đặt Top-N và thể loại ưu tiên, sau đó bấm "Lấy gợi ý phim". Sau mỗi lần phản hồi, chất lượng gợi ý sẽ được cá nhân hóa tốt hơn.'
+                    : 'Choose profile type, set Top-N and preferred genre, then click "Get movie recommendations". Feedback from each session improves personalization.'}
+                </p>
+              </div>
+            )}
+          </div>
+
+          <FilterBar
+            locale={locale}
+            isAuthenticated={isAuthenticated}
+            authUser={authUser}
+            profiles={authProfiles}
+            activeProfileId={activeProfileId}
+            setActiveProfileId={setActiveProfileId}
+            recoTopN={recoTopN}
+            setRecoTopN={setRecoTopN}
+            recoGenre={recoGenre}
+            setRecoGenre={setRecoGenre}
+            quickGenres={quickGenres}
+            recoLoading={recoLoading}
+            ratedCount={ratedCount}
+            onBurst={onBurst}
+            onOpenFeedback={onOpenFeedback}
+            onFetchRecommendations={onFetchRecommendations}
+            onOpenAuth={() => setAuthView('login')}
+          />
+        </div>
+          </>
+        ) : (
+          <p className="recommend-login-gate">
+            {locale === 'vi'
+              ? 'Đăng nhập hoặc dùng thử demo để mở hồ sơ và bắt đầu luồng gợi ý phim.'
+              : 'Sign in or use demo login to open profiles and start the recommendation flow.'}
+          </p>
+        )}
+
+        {isAuthenticated && !activeProfile && (
+          <p className="recommend-login-gate">
+            {locale === 'vi'
+              ? 'Tài khoản này chưa có hồ sơ. Vui lòng tạo hồ sơ để tiếp tục.'
+              : 'This account has no profile yet. Create one to continue.'}
+          </p>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function RecommendationMovieCard(props: RecommendationCardProps) {
+  return <RecommendationCard {...props} />
+}
+
+type RecommendationResultsSectionProps = {
+  locale: Locale
+  rows: RecommendationRow[]
+  recoTopN: number
+  userMode: UserMode
+  posterByMovie: Record<number, string>
+  watchlist: number[]
+  ratingByMovie: Record<number, number>
+  ratingPanelMovieId: number | null
+  scoreLabel: (row: RecommendationRow, index: number, total: number) => string
+  extractMovieYear: (title: string) => string
+  setDetailMovie: (row: RecommendationRow) => void
+  postEvent: (eventType: 'click' | 'view' | 'skip' | 'rate', movieId: number, metadata?: Record<string, unknown>) => Promise<void>
+  toggleWatchlist: (movieId: number) => void
+  setFeedbackNote: (text: string) => void
+  setRatingPanelMovieId: (movieId: number | null | ((prev: number | null) => number | null)) => void
+  setRatingByMovie: (updater: (prev: Record<number, number>) => Record<number, number>) => void
+  submitRating: (movieId: number, rating: number) => Promise<void>
+}
+
+function RecommendationResultsSection({
+  locale,
+  rows,
+  recoTopN,
+  userMode,
+  posterByMovie,
+  watchlist,
+  ratingByMovie,
+  ratingPanelMovieId,
+  scoreLabel,
+  extractMovieYear,
+  setDetailMovie,
+  postEvent,
+  toggleWatchlist,
+  setFeedbackNote,
+  setRatingPanelMovieId,
+  setRatingByMovie,
+  submitRating,
+}: RecommendationResultsSectionProps) {
+  return (
+    <section className="recommend-results-section">
+      <div className="recommend-content-rail">
+        <div className="recommend-results-head">
+          <h2>{locale === 'vi' ? 'Danh sách phim đề xuất cho bạn' : 'Recommended titles for you'}</h2>
+          <p>
+            {locale === 'vi'
+              ? 'Sắp xếp theo mức độ phù hợp từ hành vi gần đây và sở thích hồ sơ hiện tại.'
+              : 'Ranked by relevance and most recent behavior signals.'}
+          </p>
+        </div>
+
+        <div className="recommend-list">
+          {rows.slice(0, recoTopN).map((row, index) => {
+            const year = extractMovieYear(row.title)
+            const explainText =
+              row.explain ||
+              (userMode === 'existing'
+                ? locale === 'vi'
+                  ? 'Đề xuất dựa trên lịch sử đánh giá trước đó và gu xem phim của bạn.'
+                  : 'Suggested from your historical ratings and taste profile.'
+                : locale === 'vi'
+                  ? 'Đề xuất theo thể loại ưu tiên và độ phổ biến của nhóm phim tương tự.'
+                  : 'Suggested by preferred genre and popularity among similar titles.')
+
+            return (
+              <RecommendationMovieCard
+                key={`${row.movieId}-${index}`}
+                locale={locale}
+                row={row}
+                index={index}
+                total={rows.length || 1}
+                posterUrl={posterByMovie[row.movieId] ?? `https://picsum.photos/seed/movie-${row.movieId}/160/220`}
+                isSaved={watchlist.includes(row.movieId)}
+                ratingValue={ratingByMovie[row.movieId] ?? 0}
+                isRatingOpen={ratingPanelMovieId === row.movieId}
+                scoreLabel={scoreLabel(row, index, rows.length || 1)}
+                year={year}
+                explainText={explainText}
+                onOpenDetail={() => {
+                  setDetailMovie(row)
+                  void postEvent('view', row.movieId, { source: 'recommend-list' })
+                }}
+                onToggleSave={() => {
+                  const saved = watchlist.includes(row.movieId)
+                  toggleWatchlist(row.movieId)
+                  void postEvent('click', row.movieId, { action: saved ? 'unsave_later' : 'save_later' })
+                  setFeedbackNote(
+                    locale === 'vi'
+                      ? saved
+                        ? 'Đã bỏ khỏi danh sách xem sau.'
+                        : 'Đã lưu vào danh sách xem sau.'
+                      : saved
+                        ? 'Removed from watchlist.'
+                        : 'Saved to watchlist.',
+                  )
+                }}
+                onLike={() => {
+                  void postEvent('click', row.movieId, { action: 'like' })
+                  setFeedbackNote(locale === 'vi' ? 'Đã ghi nhận: bạn thích phim này.' : 'Preference saved: you liked this movie.')
+                }}
+                onDislike={() => {
+                  void postEvent('skip', row.movieId, { action: 'dislike' })
+                  setFeedbackNote(
+                    locale === 'vi' ? 'Đã ghi nhận: bạn không quan tâm phim này.' : 'Preference saved: not interested.',
+                  )
+                }}
+                onOpenRating={() => {
+                  setRatingPanelMovieId((prev) => (prev === row.movieId ? null : row.movieId))
+                }}
+                onSetRating={(value) => {
+                  setRatingByMovie((prev) => ({ ...prev, [row.movieId]: value }))
+                }}
+                onSubmitRating={() => {
+                  const rating = ratingByMovie[row.movieId] ?? 4
+                  void submitRating(row.movieId, rating)
+                  setRatingPanelMovieId(null)
+                }}
+              />
+            )
+          })}
+
+          {!rows.length && (
+            <p className="recommend-empty">
+              {locale === 'vi'
+                ? 'Nhấn "Lấy gợi ý phim" để hiển thị danh sách gợi ý tại đây.'
+                : 'Click "Get movie recommendations" to load personalized results here.'}
+            </p>
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function RecommendationFeedbackDrawer(props: FeedbackPanelProps) {
+  return (
+    <section className="recommend-feedback-section">
+      <div className="recommend-content-rail">
+        <FeedbackPanel {...props} />
+      </div>
+    </section>
+  )
+}
+
+type RecommendationPageShellProps = {
+  locale: Locale
+  isAuthenticated: boolean
+  authView: 'login' | 'register'
+  setAuthView: (view: 'login' | 'register') => void
+  authUser: AuthUser | null
+  authProfiles: UserProfile[]
+  activeProfileId: number | null
+  setActiveProfileId: (id: number) => void
+  activeRecoUserId: number
+  authLoading: boolean
+  authError: string
+  loginIdentifier: string
+  setLoginIdentifier: (value: string) => void
+  loginPassword: string
+  setLoginPassword: (value: string) => void
+  registerFullName: string
+  setRegisterFullName: (value: string) => void
+  registerUsername: string
+  setRegisterUsername: (value: string) => void
+  registerEmail: string
+  setRegisterEmail: (value: string) => void
+  registerPassword: string
+  setRegisterPassword: (value: string) => void
+  registerConfirmPassword: string
+  setRegisterConfirmPassword: (value: string) => void
+  onLogin: () => void
+  onRegister: () => void
+  onDemoLogin: () => void
+  onLogout: () => void
+  featuredRef: (node: HTMLElement | null) => void
+  stageTabs: ReadonlyArray<{ key: RecoStage; label: string }>
+  recoStage: RecoStage
+  setRecoStage: (stage: RecoStage) => void
+  apiHealth: string
+  routeBadge: string
+  routeExplain: string
+  userMode: UserMode
+  setUserMode: (mode: UserMode) => void
+  recoTopN: number
+  setRecoTopN: (value: number) => void
+  recoGenre: string
+  setRecoGenre: (genre: string) => void
+  quickGenres: string[]
+  recoLoading: boolean
+  ratedMovieIds: number[]
+  recommendationRows: RecommendationRow[]
+  posterByMovie: Record<number, string>
+  watchlist: number[]
+  watchlistRows: RecommendationRow[]
+  ratingByMovie: Record<number, number>
+  ratedRows: RecommendationRow[]
+  ratingPanelMovieId: number | null
+  scoreLabel: (row: RecommendationRow, index: number, total: number) => string
+  extractMovieYear: (title: string) => string
+  setDetailMovie: (row: RecommendationRow) => void
+  postEvent: (eventType: 'click' | 'view' | 'skip' | 'rate', movieId: number, metadata?: Record<string, unknown>) => Promise<void>
+  toggleWatchlist: (movieId: number) => void
+  setFeedbackNote: (text: string) => void
+  setRatingPanelMovieId: (movieId: number | null | ((prev: number | null) => number | null)) => void
+  setRatingByMovie: (updater: (prev: Record<number, number>) => Record<number, number>) => void
+  submitRating: (movieId: number, rating: number) => Promise<void>
+  fetchRecommendations: () => Promise<void>
+  handleBurst: (event: ReactMouseEvent<HTMLElement>) => void
+  recoError: string
+  feedbackNote: string
+}
+
+function RecommendationPageShell({
+  locale,
+  isAuthenticated,
+  authView,
+  setAuthView,
+  authUser,
+  authProfiles,
+  activeProfileId,
+  setActiveProfileId,
+  activeRecoUserId,
+  authLoading,
+  authError,
+  loginIdentifier,
+  setLoginIdentifier,
+  loginPassword,
+  setLoginPassword,
+  registerFullName,
+  setRegisterFullName,
+  registerUsername,
+  setRegisterUsername,
+  registerEmail,
+  setRegisterEmail,
+  registerPassword,
+  setRegisterPassword,
+  registerConfirmPassword,
+  setRegisterConfirmPassword,
+  onLogin,
+  onRegister,
+  onDemoLogin,
+  onLogout,
+  featuredRef,
+  stageTabs,
+  recoStage,
+  setRecoStage,
+  apiHealth,
+  routeBadge,
+  routeExplain,
+  userMode,
+  setUserMode,
+  recoTopN,
+  setRecoTopN,
+  recoGenre,
+  setRecoGenre,
+  quickGenres,
+  recoLoading,
+  ratedMovieIds,
+  recommendationRows,
+  posterByMovie,
+  watchlist,
+  watchlistRows,
+  ratingByMovie,
+  ratedRows,
+  ratingPanelMovieId,
+  scoreLabel,
+  extractMovieYear,
+  setDetailMovie,
+  postEvent,
+  toggleWatchlist,
+  setFeedbackNote,
+  setRatingPanelMovieId,
+  setRatingByMovie,
+  submitRating,
+  fetchRecommendations,
+  handleBurst,
+  recoError,
+  feedbackNote,
+}: RecommendationPageShellProps) {
+  return (
+    <div className="recommend-page-shell">
+      <motion.section
+        ref={featuredRef}
+        data-scene="featured"
+        className="scene-section scroll-mt-24"
+        initial={{ opacity: 0, y: 22 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ amount: 0.3, once: true }}
+        transition={{ duration: 0.62, ease: EASE_SMOOTH }}
+      >
+        <RecommendationHero locale={locale} />
+      </motion.section>
+
+      <RecommendationControls
+        locale={locale}
+        isAuthenticated={isAuthenticated}
+        authView={authView}
+        setAuthView={setAuthView}
+        authUser={authUser}
+        authProfiles={authProfiles}
+        activeProfileId={activeProfileId}
+        setActiveProfileId={(profileId) => {
+          setActiveProfileId(profileId)
+          setRecoStage('onboard')
+          setRatingPanelMovieId(null)
+        }}
+        authLoading={authLoading}
+        authError={authError}
+        loginIdentifier={loginIdentifier}
+        setLoginIdentifier={setLoginIdentifier}
+        loginPassword={loginPassword}
+        setLoginPassword={setLoginPassword}
+        registerFullName={registerFullName}
+        setRegisterFullName={setRegisterFullName}
+        registerUsername={registerUsername}
+        setRegisterUsername={setRegisterUsername}
+        registerEmail={registerEmail}
+        setRegisterEmail={setRegisterEmail}
+        registerPassword={registerPassword}
+        setRegisterPassword={setRegisterPassword}
+        registerConfirmPassword={registerConfirmPassword}
+        setRegisterConfirmPassword={setRegisterConfirmPassword}
+        onLogin={onLogin}
+        onRegister={onRegister}
+        onDemoLogin={onDemoLogin}
+        onLogout={onLogout}
+        stageTabs={stageTabs}
+        recoStage={recoStage}
+        setRecoStage={setRecoStage}
+        apiHealth={apiHealth}
+        routeBadge={routeBadge}
+        routeExplain={routeExplain}
+        userMode={userMode}
+        setUserMode={(mode) => {
+          setUserMode(mode)
+          const matchedProfile = authProfiles.find((profile) =>
+            mode === 'existing'
+              ? profile.che_do_goi_y === 'ca_nhan_hoa'
+              : profile.che_do_goi_y !== 'ca_nhan_hoa',
+          )
+          if (matchedProfile) {
+            setActiveProfileId(matchedProfile.id_ho_so)
+          }
+          setRecoStage('onboard')
+          setRatingPanelMovieId(null)
+        }}
+        recoTopN={recoTopN}
+        setRecoTopN={setRecoTopN}
+        recoGenre={recoGenre}
+        setRecoGenre={setRecoGenre}
+        quickGenres={quickGenres}
+        recoLoading={recoLoading}
+        ratedCount={ratedMovieIds.length}
+        onBurst={handleBurst}
+        onOpenFeedback={() => {
+          setRecoStage('feedback')
+          setRatingPanelMovieId(null)
+        }}
+        onFetchRecommendations={() => {
+          setRatingPanelMovieId(null)
+          void fetchRecommendations()
+        }}
+        showOnboardingHint={recoStage === 'onboard'}
+      />
+
+      {isAuthenticated && (
+        <div className="recommend-content-rail recommend-status-notes">
+          {recoError && <p className="recommend-error">{recoError}</p>}
+          {feedbackNote && <p className="recommend-feedback-note">{feedbackNote}</p>}
+          {watchlist.length > 0 && (
+            <p className="recommend-watchlist-note">
+              {locale === 'vi'
+                ? `Đã lưu xem sau: ${watchlist.length} phim`
+                : `Watchlist saved: ${watchlist.length} movies`}
+            </p>
+          )}
+        </div>
+      )}
+
+      {isAuthenticated && recoStage === 'discover' && (
+        <RecommendationResultsSection
+          locale={locale}
+          rows={recommendationRows}
+          recoTopN={recoTopN}
+          userMode={userMode}
+          posterByMovie={posterByMovie}
+          watchlist={watchlist}
+          ratingByMovie={ratingByMovie}
+          ratingPanelMovieId={ratingPanelMovieId}
+          scoreLabel={scoreLabel}
+          extractMovieYear={extractMovieYear}
+          setDetailMovie={setDetailMovie}
+          postEvent={postEvent}
+          toggleWatchlist={toggleWatchlist}
+          setFeedbackNote={setFeedbackNote}
+          setRatingPanelMovieId={setRatingPanelMovieId}
+          setRatingByMovie={setRatingByMovie}
+          submitRating={submitRating}
+        />
+      )}
+
+      {isAuthenticated && recoStage === 'feedback' && (
+        <RecommendationFeedbackDrawer
+          locale={locale}
+          ratedCount={ratedMovieIds.length}
+          watchlistCount={watchlist.length}
+          activeUserId={activeRecoUserId}
+          ratedRows={ratedRows}
+          watchlistRows={watchlistRows}
+          ratingByMovie={ratingByMovie}
+          onOpenMovie={(row) => setDetailMovie(row)}
+          onBurst={handleBurst}
+          onBackToDiscover={() => {
+            setRecoStage('discover')
+            setRatingPanelMovieId(null)
+          }}
+          onRefresh={() => {
+            setRecoStage('discover')
+            setRatingPanelMovieId(null)
+            void fetchRecommendations()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
 function App() {
   const reduceMotion = useReducedMotion()
   const [locale, setLocale] = useState<Locale>('vi')
+  const [authView, setAuthView] = useState<'login' | 'register'>('login')
+  const [authToken, setAuthToken] = useState<string>('')
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null)
+  const [authProfiles, setAuthProfiles] = useState<UserProfile[]>([])
+  const [activeProfileId, setActiveProfileId] = useState<number | null>(null)
+  const [authLoading, setAuthLoading] = useState<boolean>(false)
+  const [authError, setAuthError] = useState<string>('')
+  const [loginIdentifier, setLoginIdentifier] = useState<string>('demo')
+  const [loginPassword, setLoginPassword] = useState<string>('demo123')
+  const [registerFullName, setRegisterFullName] = useState<string>('')
+  const [registerUsername, setRegisterUsername] = useState<string>('')
+  const [registerEmail, setRegisterEmail] = useState<string>('')
+  const [registerPassword, setRegisterPassword] = useState<string>('')
+  const [registerConfirmPassword, setRegisterConfirmPassword] = useState<string>('')
   const [introStep, setIntroStep] = useState<number>(0)
   const [activeSection, setActiveSection] = useState<SectionId>('home')
   const [focusedService, setFocusedService] = useState<number>(1)
@@ -502,6 +1912,21 @@ function App() {
   const [cursorVisible, setCursorVisible] = useState(false)
   const [cursorLabel, setCursorLabel] = useState<string>('')
   const [sceneFlash, setSceneFlash] = useState<boolean>(false)
+  const [pageMode, setPageMode] = useState<PageMode>('landing')
+  const [userMode, setUserMode] = useState<UserMode>('existing')
+  const [recoStage, setRecoStage] = useState<RecoStage>('onboard')
+  const [recoTopN, setRecoTopN] = useState<number>(10)
+  const [recoGenre, setRecoGenre] = useState<string>('Action')
+  const [recoLoading, setRecoLoading] = useState<boolean>(false)
+  const [recoError, setRecoError] = useState<string>('')
+  const [feedbackNote, setFeedbackNote] = useState<string>('')
+  const [recoPayload, setRecoPayload] = useState<RecommendationPayload | null>(null)
+  const [apiHealth, setApiHealth] = useState<string>('checking')
+  const [watchlist, setWatchlist] = useState<number[]>([])
+  const [ratingByMovie, setRatingByMovie] = useState<Record<number, number>>({})
+  const [ratingPanelMovieId, setRatingPanelMovieId] = useState<number | null>(null)
+  const [posterByMovie, setPosterByMovie] = useState<Record<number, string>>({})
+  const [detailMovie, setDetailMovie] = useState<RecommendationRow | null>(null)
   const localeTimerRef = useRef<number | null>(null)
 
   const sectionsRef = useRef<Record<SectionId, HTMLElement | null>>({
@@ -540,6 +1965,456 @@ function App() {
   const services = locale === 'vi' ? SERVICES_VI : SERVICES_EN
   const works = locale === 'vi' ? WORKS_VI : WORKS_EN
   const awards = locale === 'vi' ? AWARDS_VI : AWARDS_EN
+  const activeProfile = useMemo(
+    () => authProfiles.find((profile) => profile.id_ho_so === activeProfileId) ?? null,
+    [activeProfileId, authProfiles],
+  )
+  const isAuthenticated = Boolean(authToken && authUser)
+  const activeRecoUserId = activeProfile?.id_user_ml ?? (userMode === 'existing' ? 2 : 999999)
+  const quickGenres = ['Action', 'Drama', 'Comedy', 'Sci-Fi', 'Thriller', 'Romance']
+  const stageTabs = useMemo(
+    () =>
+      locale === 'vi'
+        ? [
+            { key: 'onboard' as const, label: 'Khởi tạo' },
+            { key: 'discover' as const, label: 'Gợi ý' },
+            { key: 'feedback' as const, label: 'Phản hồi' },
+          ]
+        : [
+            { key: 'onboard' as const, label: 'Onboarding' },
+            { key: 'discover' as const, label: 'Recommendations' },
+            { key: 'feedback' as const, label: 'Feedback' },
+          ],
+    [locale],
+  )
+  const apiBase = useMemo(() => {
+    const envBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim()
+    if (envBase) {
+      return envBase.replace(/\/$/, '')
+    }
+    if (typeof window !== 'undefined') {
+      const currentOrigin = window.location.origin.replace(/\/$/, '')
+      if (window.location.port === '8000') {
+        return currentOrigin
+      }
+      return 'http://127.0.0.1:8000'
+    }
+    return ''
+  }, [])
+
+  const buildApiUrl = useCallback(
+    (path: string) => `${apiBase}${path.startsWith('/') ? path : `/${path}`}`,
+    [apiBase],
+  )
+
+  const formatApiError = useCallback(
+    (error: unknown): string => {
+      const raw = error instanceof Error ? error.message : String(error)
+      if (/Failed to fetch|NetworkError|ERR_CONNECTION_REFUSED/i.test(raw)) {
+        return locale === 'vi'
+          ? 'Không kết nối được API (127.0.0.1:8000). Hãy chạy lại backend rồi thử lại.'
+          : 'Could not connect to API (127.0.0.1:8000). Please restart backend and retry.'
+      }
+      return raw
+    },
+    [locale],
+  )
+
+  const clearSession = useCallback(() => {
+    setAuthToken('')
+    setAuthUser(null)
+    setAuthProfiles([])
+    setActiveProfileId(null)
+    setRecoPayload(null)
+    setRecoStage('onboard')
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem('khangdauti_token')
+      window.localStorage.removeItem('khangdauti_user')
+    }
+  }, [])
+
+  const loadProfiles = useCallback(
+    async (token: string) => {
+      const response = await fetch(buildApiUrl('/ho-so'), {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!response.ok) {
+        throw new Error(await response.text())
+      }
+      const payload = (await response.json()) as { ho_so?: UserProfile[] }
+      const profiles = payload.ho_so ?? []
+      setAuthProfiles(profiles)
+      setActiveProfileId((prev) => prev ?? profiles[0]?.id_ho_so ?? null)
+      return profiles
+    },
+    [buildApiUrl],
+  )
+
+  const loginWithCredentials = useCallback(
+    async (identifier: string, password: string) => {
+      const response = await fetch(buildApiUrl('/dang-nhap'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenDangNhap: identifier.trim(),
+          matKhau: password,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error((await response.text()) || `${response.status}`)
+      }
+      const payload = (await response.json()) as {
+        token: string
+        nguoi_dung: AuthUser
+        ho_so?: UserProfile[]
+      }
+      setAuthToken(payload.token)
+      setAuthUser(payload.nguoi_dung)
+      const profiles = payload.ho_so ?? []
+      setAuthProfiles(profiles)
+      setActiveProfileId(profiles[0]?.id_ho_so ?? null)
+      setRecoStage('onboard')
+      setRecoPayload(null)
+      setRecoError('')
+      setFeedbackNote('')
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('khangdauti_token', payload.token)
+        window.localStorage.setItem('khangdauti_user', JSON.stringify(payload.nguoi_dung))
+      }
+    },
+    [buildApiUrl],
+  )
+
+  const handleLogin = useCallback(async () => {
+    setAuthLoading(true)
+    setAuthError('')
+    try {
+      await loginWithCredentials(loginIdentifier, loginPassword)
+    } catch (error) {
+      const message = formatApiError(error)
+      setAuthError(message)
+    } finally {
+      setAuthLoading(false)
+    }
+  }, [formatApiError, loginIdentifier, loginPassword, loginWithCredentials])
+
+  const handleDemoLogin = useCallback(async () => {
+    setLoginIdentifier('demo')
+    setLoginPassword('demo123')
+    setAuthLoading(true)
+    setAuthError('')
+    try {
+      await loginWithCredentials('demo', 'demo123')
+    } catch (error) {
+      const message = formatApiError(error)
+      setAuthError(message)
+    } finally {
+      setAuthLoading(false)
+    }
+  }, [formatApiError, loginWithCredentials])
+
+  const handleRegister = useCallback(async () => {
+    if (!registerUsername.trim() || !registerEmail.trim() || !registerPassword.trim()) {
+      setAuthError(locale === 'vi' ? 'Vui lòng điền đủ thông tin đăng ký.' : 'Please fill all required registration fields.')
+      return
+    }
+    if (registerPassword !== registerConfirmPassword) {
+      setAuthError(locale === 'vi' ? 'Mật khẩu xác nhận không khớp.' : 'Password confirmation does not match.')
+      return
+    }
+
+    setAuthLoading(true)
+    setAuthError('')
+    try {
+      const response = await fetch(buildApiUrl('/dang-ky'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenTaiKhoan: registerUsername.trim(),
+          email: registerEmail.trim(),
+          matKhau: registerPassword,
+          hoTen: registerFullName.trim() || undefined,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error((await response.text()) || `${response.status}`)
+      }
+      await loginWithCredentials(registerUsername.trim(), registerPassword)
+      setAuthView('login')
+      setRegisterFullName('')
+      setRegisterUsername('')
+      setRegisterEmail('')
+      setRegisterPassword('')
+      setRegisterConfirmPassword('')
+    } catch (error) {
+      const message = formatApiError(error)
+      setAuthError(message)
+    } finally {
+      setAuthLoading(false)
+    }
+  }, [
+    buildApiUrl,
+    formatApiError,
+    locale,
+    loginWithCredentials,
+    registerConfirmPassword,
+    registerEmail,
+    registerFullName,
+    registerPassword,
+    registerUsername,
+  ])
+
+  const handleLogout = useCallback(() => {
+    clearSession()
+    setAuthView('login')
+  }, [clearSession])
+
+  const fetchHealth = useCallback(async () => {
+    try {
+      const response = await fetch(buildApiUrl('/health'))
+      if (!response.ok) {
+        throw new Error(`${response.status}`)
+      }
+      setApiHealth('online')
+    } catch {
+      setApiHealth('offline')
+    }
+  }, [buildApiUrl])
+
+  const fetchRecommendations = useCallback(async () => {
+    if (!isAuthenticated || !authToken || !activeProfileId) {
+      setRecoError(locale === 'vi' ? 'Vui lòng đăng nhập và chọn hồ sơ trước khi lấy gợi ý.' : 'Please sign in and select a profile before requesting recommendations.')
+      setRecoStage('onboard')
+      return
+    }
+
+    setRecoLoading(true)
+    setRecoError('')
+    setFeedbackNote('')
+    try {
+      const params = new URLSearchParams()
+      params.set('top_n', String(recoTopN))
+      if (recoGenre.trim()) {
+        params.set('genre', recoGenre.trim())
+      }
+      const response = await fetch(buildApiUrl(`/goi-y/${activeProfileId}?${params.toString()}`), {
+        headers: { Authorization: `Bearer ${authToken}` },
+      })
+      if (!response.ok) {
+        const errText = await response.text()
+        throw new Error(errText || `${response.status}`)
+      }
+      const payload = (await response.json()) as RecommendationPayload
+      setRecoPayload(payload)
+      setRecoStage('discover')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown API error'
+      setRecoError(message)
+      setRecoPayload(null)
+    } finally {
+      setRecoLoading(false)
+    }
+  }, [activeProfileId, authToken, buildApiUrl, isAuthenticated, locale, recoGenre, recoTopN])
+
+  const postEvent = useCallback(
+    async (eventType: 'click' | 'view' | 'skip' | 'rate', movieId: number, metadata: Record<string, unknown> = {}) => {
+      await fetch(buildApiUrl('/event'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          eventType,
+          userId: activeRecoUserId,
+          movieId,
+          metadata,
+        }),
+      })
+    },
+    [activeRecoUserId, buildApiUrl],
+  )
+
+  const submitRating = useCallback(
+    async (movieId: number, rating: number) => {
+      if (!isAuthenticated || !authToken || !activeProfileId) {
+        setFeedbackNote(locale === 'vi' ? 'Vui lòng đăng nhập để gửi phản hồi.' : 'Please sign in to submit feedback.')
+        return
+      }
+
+      setFeedbackNote('')
+      try {
+        const response = await fetch(buildApiUrl('/phan-hoi'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            idHoSo: activeProfileId,
+            idPhim: movieId,
+            diemDanhGia: rating,
+            retrain: false,
+          }),
+        })
+        if (!response.ok) {
+          const errText = await response.text()
+          throw new Error(errText || `${response.status}`)
+        }
+        await postEvent('rate', movieId, { rating })
+        setRecoStage('feedback')
+        setFeedbackNote(
+          locale === 'vi'
+            ? 'Đã lưu đánh giá. Lần gợi ý kế tiếp sẽ cá nhân hóa tốt hơn.'
+            : 'Rating saved. Next recommendations will improve.',
+        )
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Rate failed'
+        setFeedbackNote(locale === 'vi' ? `Không lưu được đánh giá: ${message}` : `Could not save rating: ${message}`)
+      }
+    },
+    [activeProfileId, authToken, buildApiUrl, isAuthenticated, locale, postEvent],
+  )
+
+  const toggleWatchlist = useCallback((movieId: number) => {
+    setWatchlist((prev) => (prev.includes(movieId) ? prev.filter((id) => id !== movieId) : [...prev, movieId]))
+  }, [])
+
+  const scoreLabel = useCallback(
+    (row: RecommendationRow, index: number, total: number) => {
+      if (row.als_score != null && row.als_score <= 5) {
+        return locale === 'vi'
+          ? `Điểm dự đoán ${Number(row.als_score).toFixed(1)}/5`
+          : `Predicted ${Number(row.als_score).toFixed(1)}/5`
+      }
+      const span = Math.max(total - 1, 1)
+      const pct = Math.max(74, Math.round(94 - (index / span) * 18))
+      if (pct >= 92) {
+        return locale === 'vi' ? `Đề xuất nổi bật · ${pct}%` : `Top pick · ${pct}%`
+      }
+      if (pct >= 84) {
+        return locale === 'vi' ? `Mức phù hợp cao · ${pct}%` : `High match · ${pct}%`
+      }
+      return locale === 'vi' ? `Mức phù hợp ${pct}%` : `Match level ${pct}%`
+    },
+    [locale],
+  )
+
+  const recommendationRows = useMemo(() => recoPayload?.recommendations ?? [], [recoPayload?.recommendations])
+
+  const routeExplain = useMemo(() => {
+    if (!isAuthenticated) {
+      return locale === 'vi'
+        ? 'Đăng nhập để mở hồ sơ cá nhân và nhận gợi ý phim theo tài khoản của bạn.'
+        : 'Sign in to open personal profiles and receive account-based recommendations.'
+    }
+
+    const route = recoPayload?.route ?? ''
+    if (route === 'als_legacy') {
+      return locale === 'vi'
+        ? 'Bạn đang nhận gợi ý cá nhân hóa từ lịch sử xem trước đó (ALS).'
+        : 'History-based profile: served through the personalization route.'
+    }
+    if (route === 'hybrid') {
+      return locale === 'vi'
+        ? 'Hệ thống ưu tiên gợi ý cá nhân hóa dựa trên lịch sử đánh giá và gu thể loại (Hybrid).'
+        : 'History-based profile: recommendations blend past behavior and genre affinity.'
+    }
+    if (route === 'fallback') {
+      return locale === 'vi'
+        ? 'Hồ sơ mới đang nhận gợi ý theo thể loại ưu tiên và độ phổ biến của phim (Cold Start).'
+        : 'New profile: recommendations are generated from selected genre and popularity.'
+    }
+    if (userMode === 'existing') {
+      return locale === 'vi'
+        ? 'Bạn đang ở chế độ hồ sơ có lịch sử. Bấm "Lấy gợi ý phim" để nhận danh sách cá nhân hóa.'
+        : 'You are in history-based profile mode. Click "Get movie recommendations" for personalized picks.'
+    }
+    if (userMode === 'new') {
+      return locale === 'vi'
+        ? 'Bạn đang ở chế độ hồ sơ mới. Hệ thống sẽ bắt đầu bằng gợi ý theo sở thích ban đầu.'
+        : 'You are in new-profile mode. The system starts with genre and popularity-based picks.'
+    }
+    return locale === 'vi'
+      ? 'Chọn hồ sơ và nhấn "Lấy gợi ý phim" để bắt đầu.'
+      : 'Choose profile and click "Get Recommendations" to start the usage flow.'
+  }, [isAuthenticated, locale, recoPayload?.route, userMode])
+
+  const routeBadge = useMemo(() => {
+    if (!isAuthenticated) {
+      return locale === 'vi' ? 'Chưa đăng nhập' : 'Not signed in'
+    }
+    const route = recoPayload?.route ?? ''
+    if (route === 'hybrid') {
+      return locale === 'vi' ? 'Gợi ý cá nhân hóa (Hybrid)' : 'Personalized route (Hybrid)'
+    }
+    if (route === 'fallback') {
+      return locale === 'vi' ? 'Gợi ý theo sở thích ban đầu' : 'Starter preference route'
+    }
+    if (route === 'als_legacy') {
+      return locale === 'vi' ? 'Gợi ý cá nhân hóa (ALS)' : 'Personalized route (ALS)'
+    }
+    return locale === 'vi' ? 'Sẵn sàng tạo gợi ý' : 'Ready for recommendations'
+  }, [isAuthenticated, locale, recoPayload?.route])
+
+  const ratedMovieIds = useMemo(
+    () =>
+      Object.entries(ratingByMovie)
+        .filter(([, score]) => score > 0)
+        .map(([movieId]) => Number(movieId)),
+    [ratingByMovie],
+  )
+
+  const ratedRows = useMemo(
+    () => recommendationRows.filter((row) => ratedMovieIds.includes(row.movieId)),
+    [recommendationRows, ratedMovieIds],
+  )
+
+  const watchlistRows = useMemo(
+    () => recommendationRows.filter((row) => watchlist.includes(row.movieId)),
+    [recommendationRows, watchlist],
+  )
+
+  const extractMovieYear = useCallback((title: string): string => {
+    const matched = title.match(/\((\d{4})\)\s*$/)
+    return matched?.[1] ?? ''
+  }, [])
+
+  const movieDetailText = useMemo(() => {
+    if (!detailMovie) {
+      return ''
+    }
+    return detailMovie.explain || (locale === 'vi' ? 'Đề xuất dựa trên tín hiệu hệ thống.' : 'Recommended from system signals.')
+  }, [detailMovie, locale])
+
+  const fallbackPoster = useCallback((movieId: number) => `https://picsum.photos/seed/movie-${movieId}/160/220`, [])
+
+  const lookupPoster = useCallback(
+    async (movie: RecommendationRow): Promise<string> => {
+      const query = movie.title.replace(/\(\d{4}\)\s*$/g, '').trim()
+      if (!query) {
+        return fallbackPoster(movie.movieId)
+      }
+      try {
+        const params = new URLSearchParams({
+          term: query,
+          media: 'movie',
+          entity: 'movie',
+          limit: '1',
+        })
+        const response = await fetch(`https://itunes.apple.com/search?${params.toString()}`)
+        if (!response.ok) {
+          return fallbackPoster(movie.movieId)
+        }
+        const payload = (await response.json()) as { results?: Array<{ artworkUrl100?: string }> }
+        const artwork = payload.results?.[0]?.artworkUrl100
+        if (!artwork) {
+          return fallbackPoster(movie.movieId)
+        }
+        return artwork.replace('100x100bb.jpg', '600x900bb.jpg').replace('100x100bb', '600x900bb')
+      } catch {
+        return fallbackPoster(movie.movieId)
+      }
+    },
+    [fallbackPoster],
+  )
 
   const switchLocale = useCallback(
     (nextLocale: Locale) => {
@@ -581,6 +2456,43 @@ function App() {
   }, [])
 
   useEffect(() => {
+    void fetchHealth()
+  }, [fetchHealth])
+
+  useEffect(() => {
+    const rows = recoPayload?.recommendations ?? []
+    if (!rows.length) {
+      return
+    }
+    const missing = rows.filter((row) => !posterByMovie[row.movieId])
+    if (!missing.length) {
+      return
+    }
+    let active = true
+    void (async () => {
+      const results = await Promise.all(
+        missing.map(async (movie) => ({
+          movieId: movie.movieId,
+          poster: await lookupPoster(movie),
+        })),
+      )
+      if (!active) {
+        return
+      }
+      setPosterByMovie((prev) => {
+        const next = { ...prev }
+        results.forEach((item) => {
+          next[item.movieId] = item.poster
+        })
+        return next
+      })
+    })()
+    return () => {
+      active = false
+    }
+  }, [lookupPoster, posterByMovie, recoPayload])
+
+  useEffect(() => {
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -602,7 +2514,7 @@ function App() {
       }
     })
     return () => observer.disconnect()
-  }, [])
+  }, [pageMode])
 
   useEffect(() => {
     if (!pointerFine || reduceMotion) {
@@ -668,14 +2580,14 @@ function App() {
     [addBurst],
   )
 
-  const navigateScene = useCallback(
-    (id: SectionId, event?: ReactMouseEvent<HTMLElement>) => {
-      if (event) {
-        addBurst(event.clientX, event.clientY)
-      }
-      setSceneFlash(true)
-      window.setTimeout(() => setSceneFlash(false), 340)
+  const flashScene = useCallback(() => {
+    setSceneFlash(true)
+    window.setTimeout(() => setSceneFlash(false), 340)
+  }, [])
 
+  const scrollToScene = useCallback(
+    (id: SectionId) => {
+      flashScene()
       const section = sectionsRef.current[id]
       if (!section) {
         return
@@ -683,8 +2595,112 @@ function App() {
       const top = section.getBoundingClientRect().top + window.scrollY - 84
       window.scrollTo({ top, behavior: 'smooth' })
     },
-    [addBurst],
+    [flashScene],
   )
+
+  const openRecommendPage = useCallback(
+    (event?: ReactMouseEvent<HTMLElement>) => {
+      if (event) {
+        addBurst(event.clientX, event.clientY)
+      }
+      flashScene()
+      setPageMode('recommend')
+      setActiveSection('featured')
+      if (typeof window !== 'undefined' && window.location.pathname !== '/recommend') {
+        window.history.pushState({}, '', '/recommend')
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    },
+    [addBurst, flashScene],
+  )
+
+  const navigateScene = useCallback(
+    (id: SectionId, event?: ReactMouseEvent<HTMLElement>) => {
+      if (id === 'featured') {
+        openRecommendPage(event)
+        return
+      }
+      if (event) {
+        addBurst(event.clientX, event.clientY)
+      }
+      if (pageMode === 'recommend') {
+        setPageMode('landing')
+        if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+          window.history.pushState({}, '', '/')
+        }
+        window.setTimeout(() => {
+          scrollToScene(id)
+        }, 50)
+        return
+      }
+      scrollToScene(id)
+    },
+    [addBurst, openRecommendPage, pageMode, scrollToScene],
+  )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    const syncFromPath = () => {
+      const recommendPath = window.location.pathname.startsWith('/recommend')
+      setPageMode(recommendPath ? 'recommend' : 'landing')
+      if (recommendPath) {
+        setActiveSection('featured')
+      }
+    }
+    syncFromPath()
+    window.addEventListener('popstate', syncFromPath)
+    return () => {
+      window.removeEventListener('popstate', syncFromPath)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    const savedToken = window.localStorage.getItem('khangdauti_token') ?? ''
+    const savedUserRaw = window.localStorage.getItem('khangdauti_user')
+    if (!savedToken || !savedUserRaw) {
+      return
+    }
+    try {
+      const parsedUser = JSON.parse(savedUserRaw) as AuthUser
+      setAuthToken(savedToken)
+      setAuthUser(parsedUser)
+      void loadProfiles(savedToken).catch(() => {
+        clearSession()
+      })
+    } catch {
+      clearSession()
+    }
+  }, [clearSession, loadProfiles])
+
+  useEffect(() => {
+    if (!activeProfile) {
+      return
+    }
+    const inferredMode: UserMode =
+      activeProfile.che_do_goi_y === 'ca_nhan_hoa' ? 'existing' : 'new'
+    setUserMode(inferredMode)
+    if (activeProfile.the_loai_uu_tien && !recoGenre.trim()) {
+      const firstGenre = String(activeProfile.the_loai_uu_tien).split('|')[0]?.trim()
+      if (firstGenre) {
+        setRecoGenre(firstGenre)
+      }
+    }
+  }, [activeProfile, recoGenre, setUserMode])
+
+  useEffect(() => {
+    if (!authProfiles.length) {
+      return
+    }
+    const matched = authProfiles.some((profile) => profile.id_ho_so === activeProfileId)
+    if (!matched) {
+      setActiveProfileId(authProfiles[0].id_ho_so)
+    }
+  }, [activeProfileId, authProfiles])
 
   const sectionReveal = {
     hidden: { opacity: 0, y: 42 },
@@ -773,6 +2789,7 @@ function App() {
           <nav className="hidden flex-1 items-center justify-evenly px-3 lg:flex xl:px-6">
             {navItems.map((item) => {
               const isActive = activeSection === item.id
+              const menuLabel = item.id === 'featured' ? (locale === 'vi' ? 'Gợi ý phim' : 'Recommend') : item.label
               return (
                 <button
                   key={item.id}
@@ -782,7 +2799,7 @@ function App() {
                   onClick={(event) => navigateScene(item.id, event)}
                   data-cursor-label="OPEN"
                 >
-                  {item.label}
+                  {menuLabel}
                   {(item.id === 'works' || item.id === 'services') && <ChevronDown size={12} />}
                 </button>
               )
@@ -808,33 +2825,70 @@ function App() {
                 EN
               </button>
             </div>
-            <button
-              type="button"
-              className="auth-btn"
-              data-cursor-label="SIGN IN"
-              onMouseDown={handleBurst}
-            >
-              {copy.signIn}
-            </button>
-            <button
-              type="button"
-              className="auth-btn auth-btn-primary"
-              data-cursor-label="SIGN UP"
-              onMouseDown={handleBurst}
-            >
-              {copy.signUp}
-            </button>
+            {isAuthenticated && authUser ? (
+              <>
+                <button
+                  type="button"
+                  className="auth-btn"
+                  data-cursor-label="PROFILE"
+                  onMouseDown={handleBurst}
+                  onClick={(event) => openRecommendPage(event)}
+                >
+                  {authUser.ten_tai_khoan}
+                </button>
+                <button
+                  type="button"
+                  className="auth-btn auth-btn-primary"
+                  data-cursor-label="SIGN OUT"
+                  onMouseDown={handleBurst}
+                  onClick={() => handleLogout()}
+                >
+                  {locale === 'vi' ? 'Đăng xuất' : 'Sign out'}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="auth-btn"
+                  data-cursor-label="SIGN IN"
+                  onMouseDown={handleBurst}
+                  onClick={(event) => {
+                    setAuthView('login')
+                    openRecommendPage(event)
+                  }}
+                >
+                  {copy.signIn}
+                </button>
+                <button
+                  type="button"
+                  className="auth-btn auth-btn-primary"
+                  data-cursor-label="SIGN UP"
+                  onMouseDown={handleBurst}
+                  onClick={(event) => {
+                    setAuthView('register')
+                    openRecommendPage(event)
+                  }}
+                >
+                  {copy.signUp}
+                </button>
+              </>
+            )}
           </div>
         </div>
       </header>
 
       <motion.main
         key={locale}
-        className="mx-auto w-[min(96vw,1480px)] px-4 pb-28 pt-8 md:px-6 md:pt-10"
+        className={`pb-28 pt-8 md:pt-10 ${
+          pageMode === 'recommend' ? 'w-full max-w-none px-0' : 'mx-auto w-[min(96vw,1480px)] px-4 md:px-6'
+        }`}
         initial={{ opacity: 0.72, y: 8, filter: 'blur(4px)' }}
         animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
         transition={{ duration: 0.42, ease: EASE_SMOOTH }}
       >
+        {pageMode === 'landing' && (
+          <>
         <motion.section
           ref={(node) => {
             sectionsRef.current.home = node
@@ -906,7 +2960,7 @@ function App() {
                 className="primary-cta"
                 data-cursor-label="START"
                 onMouseDown={handleBurst}
-                onClick={(event) => navigateScene('works', event)}
+                onClick={(event) => navigateScene('featured', event)}
               >
                 {copy.heroPrimaryCta}
               </button>
@@ -1023,54 +3077,142 @@ function App() {
           </div>
         </motion.section>
 
-        <TransitionPlate label={copy.plateFlow} />
-
-        <motion.section
-          ref={(node) => {
-            sectionsRef.current.featured = node
-          }}
-          data-scene="featured"
-          className="scene-section featured-scene scroll-mt-24 border-b border-[rgba(221,180,31,0.12)] py-18"
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ amount: 0.3, once: true }}
-          variants={sectionReveal}
-        >
-          <div className="featured-card">
-            <img
-              src="https://images.unsplash.com/photo-1594909122845-11baa439b7bf?auto=format&fit=crop&w=1800&q=80"
-              alt="Hybrid recommendation route"
-              loading="lazy"
-            />
-            <div className="featured-overlay" />
-            <div className="featured-content">
-              <p className="section-kicker">{copy.featuredKicker}</p>
-              <h2>{copy.featuredTitle}</h2>
-              <div className="featured-meta">
-                <p>
-                  <span>{copy.featuredInputLabel}</span>
-                  {copy.featuredInputValue}
-                </p>
-                <p>
-                  <span>{copy.featuredRouteLabel}</span>
-                  {copy.featuredRouteValue}
-                </p>
-                <p>
-                  <span>{copy.featuredOutputLabel}</span>
-                  {copy.featuredOutputValue}
-                </p>
-                <p>
-                  <span>{copy.featuredExplainLabel}</span>
-                  {copy.featuredExplainValue}
-                </p>
+        <TransitionPlate label={locale === 'vi' ? 'GỢI Ý PHIM' : 'RECOMMEND'} />
+          </>
+        )}
+        {pageMode === 'landing' ? (
+          <motion.section
+            ref={(node) => {
+              sectionsRef.current.featured = node
+            }}
+            data-scene="featured"
+            className="scene-section featured-scene scroll-mt-24 border-b border-[rgba(221,180,31,0.12)] py-18"
+            initial="hidden"
+            whileInView="visible"
+            viewport={{ amount: 0.3, once: true }}
+            variants={sectionReveal}
+          >
+            <div className="featured-card">
+              <img
+                src="https://images.unsplash.com/photo-1594909122845-11baa439b7bf?auto=format&fit=crop&w=1800&q=80"
+                alt="Live movie recommendation"
+                loading="lazy"
+              />
+              <div className="featured-overlay" />
+              <div className="featured-content">
+                <p className="section-kicker">{locale === 'vi' ? 'Mục giới thiệu' : 'Introduction'}</p>
+                <h2>{copy.featuredTitle}</h2>
+                <div className="recommend-intro-card">
+                  <p>
+                    {locale === 'vi'
+                      ? 'Đây là phần giới thiệu ngắn. Bấm nút bên dưới để mở trang gợi ý phim riêng, nơi bạn có thể chạy full flow: user cũ/user mới, xem lý do gợi ý, chấm sao và lưu xem sau.'
+                      : 'This is the introduction block. Open the dedicated recommendation page to run the full user flow: returning/new user route, explanation, rating, and watchlist actions.'}
+                  </p>
+                  <div className="recommend-actions">
+                    <button
+                      type="button"
+                      className="primary-cta recommend-run-btn"
+                      onMouseDown={handleBurst}
+                      onClick={(event) => openRecommendPage(event)}
+                    >
+                      {locale === 'vi' ? 'Mở trang Gợi ý phim' : 'Open Recommendation Page'}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-cta recommend-run-btn"
+                      onMouseDown={handleBurst}
+                      onClick={(event) => navigateScene('works', event)}
+                    >
+                      {locale === 'vi' ? 'Xem kịch bản demo' : 'See demo scenarios'}
+                    </button>
+                  </div>
+                </div>
               </div>
+              <button
+                type="button"
+                className="featured-cta"
+                onMouseDown={handleBurst}
+                onClick={(event) => openRecommendPage(event)}
+                data-cursor-label="VIEW"
+              >
+                <ArrowUpRight size={18} />
+              </button>
             </div>
-            <button type="button" className="featured-cta" onMouseDown={handleBurst} data-cursor-label="VIEW">
-              <ArrowUpRight size={18} />
-            </button>
-          </div>
-        </motion.section>
-
+          </motion.section>
+        ) : (
+          <RecommendationPageShell
+            locale={locale}
+            isAuthenticated={isAuthenticated}
+            authView={authView}
+            setAuthView={setAuthView}
+            authUser={authUser}
+            authProfiles={authProfiles}
+            activeProfileId={activeProfileId}
+            setActiveProfileId={setActiveProfileId}
+            activeRecoUserId={activeRecoUserId}
+            authLoading={authLoading}
+            authError={authError}
+            loginIdentifier={loginIdentifier}
+            setLoginIdentifier={setLoginIdentifier}
+            loginPassword={loginPassword}
+            setLoginPassword={setLoginPassword}
+            registerFullName={registerFullName}
+            setRegisterFullName={setRegisterFullName}
+            registerUsername={registerUsername}
+            setRegisterUsername={setRegisterUsername}
+            registerEmail={registerEmail}
+            setRegisterEmail={setRegisterEmail}
+            registerPassword={registerPassword}
+            setRegisterPassword={setRegisterPassword}
+            registerConfirmPassword={registerConfirmPassword}
+            setRegisterConfirmPassword={setRegisterConfirmPassword}
+            onLogin={handleLogin}
+            onRegister={handleRegister}
+            onDemoLogin={handleDemoLogin}
+            onLogout={handleLogout}
+            featuredRef={(node) => {
+              sectionsRef.current.featured = node
+              heroRef.current = node
+            }}
+            stageTabs={stageTabs}
+            recoStage={recoStage}
+            setRecoStage={setRecoStage}
+            apiHealth={apiHealth}
+            routeBadge={routeBadge}
+            routeExplain={routeExplain}
+            userMode={userMode}
+            setUserMode={setUserMode}
+            recoTopN={recoTopN}
+            setRecoTopN={setRecoTopN}
+            recoGenre={recoGenre}
+            setRecoGenre={setRecoGenre}
+            quickGenres={quickGenres}
+            recoLoading={recoLoading}
+            ratedMovieIds={ratedMovieIds}
+            recommendationRows={recommendationRows}
+            posterByMovie={posterByMovie}
+            watchlist={watchlist}
+            watchlistRows={watchlistRows}
+            ratingByMovie={ratingByMovie}
+            ratedRows={ratedRows}
+            ratingPanelMovieId={ratingPanelMovieId}
+            scoreLabel={scoreLabel}
+            extractMovieYear={extractMovieYear}
+            setDetailMovie={setDetailMovie}
+            postEvent={postEvent}
+            toggleWatchlist={toggleWatchlist}
+            setFeedbackNote={setFeedbackNote}
+            setRatingPanelMovieId={setRatingPanelMovieId}
+            setRatingByMovie={setRatingByMovie}
+            submitRating={submitRating}
+            fetchRecommendations={fetchRecommendations}
+            handleBurst={handleBurst}
+            recoError={recoError}
+            feedbackNote={feedbackNote}
+          />
+        )}
+        {pageMode === 'landing' && (
+          <>
         <TransitionPlate label={copy.plateScenarios} />
 
         <motion.section
@@ -1229,10 +3371,61 @@ function App() {
             {copy.contactButton}
           </button>
         </motion.section>
+          </>
+        )}
+
+        <AnimatePresence>
+          {detailMovie && (
+            <motion.div
+              className="movie-detail-modal"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setDetailMovie(null)}
+            >
+              <motion.div
+                className="movie-detail-card"
+                initial={{ y: 26, opacity: 0.7 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: 20, opacity: 0.6 }}
+                transition={{ duration: 0.28 }}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <img
+                  src={posterByMovie[detailMovie.movieId] ?? `https://picsum.photos/seed/movie-${detailMovie.movieId}/360/520`}
+                  alt={detailMovie.title}
+                  loading="lazy"
+                />
+                <div className="movie-detail-info">
+                  <p className="section-kicker">{locale === 'vi' ? 'Chi tiết phim' : 'Movie detail'}</p>
+                  <h3>{detailMovie.title}</h3>
+                  <p className="movie-detail-genres">{detailMovie.genres}</p>
+                  <p className="movie-detail-explain">{movieDetailText}</p>
+                  <div className="movie-detail-actions">
+                    <button
+                      type="button"
+                      className="recommend-chip-btn is-active"
+                      onClick={() => toggleWatchlist(detailMovie.movieId)}
+                    >
+                      {locale === 'vi' ? 'Lưu xem sau' : 'Save later'}
+                    </button>
+                    <button type="button" className="recommend-chip-btn" onClick={() => setDetailMovie(null)}>
+                      {locale === 'vi' ? 'Đóng' : 'Close'}
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </motion.main>
 
-      <footer className="border-t border-[rgba(255,255,255,0.06)] px-4 py-7 md:px-6">
-        <div className="mx-auto flex w-[min(96vw,1480px)] items-center justify-between gap-3 text-[0.78rem] uppercase tracking-[0.2em] text-[var(--text-soft)]">
+      <footer className="mt-4 border-t border-[rgba(255,255,255,0.08)] px-4 py-8 md:px-6 md:py-10">
+        <div
+          className={`flex items-center justify-between gap-3 text-[0.78rem] uppercase tracking-[0.18em] text-[var(--text-soft)] ${
+            pageMode === 'recommend' ? 'recommend-content-rail' : 'mx-auto w-[min(96vw,1480px)]'
+          }`}
+        >
           <p>{copy.footerLeft}</p>
           <p>{copy.footerMid}</p>
           <p>{copy.footerRight}</p>
@@ -1286,3 +3479,4 @@ function App() {
 }
 
 export default App
+
